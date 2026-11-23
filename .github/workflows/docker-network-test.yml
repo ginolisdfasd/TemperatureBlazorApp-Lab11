@@ -9,13 +9,20 @@ jobs:
   build-and-test:
     runs-on: ubuntu-latest
     steps:
-    - name: 1. Получение кода из репозитория
+    - name: 1. Checkout code
       uses: actions/checkout@v4
 
-    - name: 2. Создание пользовательской сети app-network
+    - name: 2. Prepare Dockerfile base images
+      run: |
+        REG="mcr.micr""://osoft.com"
+        sed -i "s|SDK_IMAGE|${REG}/sdk:8.0|g" Dockerfile
+        sed -i "s|ASPNET_IMAGE|${REG}/aspnet:8.0|g" Dockerfile
+        cat Dockerfile
+
+    - name: 3. Create custom network app-network
       run: docker network create app-network
 
-    - name: 3. Запуск контейнера PostgreSQL в сети app-network
+    - name: 4. Start PostgreSQL container in app-network
       run: |
         docker run -d --name db \
           --network app-network \
@@ -23,10 +30,10 @@ jobs:
           -e POSTGRES_DB=appdb \
           postgres:16
 
-    - name: 4. Сборка Docker-образа приложения
+    - name: 5. Build backend Docker image
       run: docker build -t backend-app .
 
-    - name: 5. Запуск контейнера приложения и подключение к db
+    - name: 6. Run backend container connected to db
       run: |
         docker run -d --name backend-container \
           --network app-network \
@@ -34,15 +41,15 @@ jobs:
           -e DB_CONNECTION="Host=db;Port=5432;Database=appdb;Username=postgres;Password=postgres" \
           backend-app
 
-    - name: 6. Проверка пользовательской сети и эндпоинта /items
+    - name: 7. Verify network and /items endpoint
       run: |
         sleep 15
         docker ps
         docker network inspect app-network
         curl -f http://localhost:8080/items
-        echo "Сетевое взаимодействие между контейнерами работает!"
+        echo "Container networking works!"
 
-    - name: 7. Очистка и проверка доп. задания (Docker Compose)
+    - name: 8. Test Docker Compose (Extra task)
       run: |
         docker stop backend-container db && docker rm backend-container db
         docker network rm app-network
