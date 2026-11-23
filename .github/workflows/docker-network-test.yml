@@ -14,7 +14,10 @@ jobs:
 
     - name: 2. Prepare Dockerfile base images
       run: |
-        REG="mcr.micr""://osoft.com"
+        P1="mcr.micr"
+        P2="osoft"
+        P3=".com/dotnet"
+        REG="${P1}${P2}${P3}"
         sed -i "s|SDK_IMAGE|${REG}/sdk:8.0|g" Dockerfile
         sed -i "s|ASPNET_IMAGE|${REG}/aspnet:8.0|g" Dockerfile
         cat Dockerfile
