@@ -1,0 +1,53 @@
+name: Docker Network Test (Lab 11)
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+    - name: 1. Получение кода из репозитория
+      uses: actions/checkout@v4
+
+    - name: 2. Создание пользовательской сети app-network
+      run: docker network create app-network
+
+    - name: 3. Запуск контейнера PostgreSQL в сети app-network
+      run: |
+        docker run -d --name db \
+          --network app-network \
+          -e POSTGRES_PASSWORD=postgres \
+          -e POSTGRES_DB=appdb \
+          postgres:16
+
+    - name: 4. Сборка Docker-образа приложения
+      run: docker build -t backend-app .
+
+    - name: 5. Запуск контейнера приложения и подключение к db
+      run: |
+        docker run -d --name backend-container \
+          --network app-network \
+          -p 8080:8080 \
+          -e DB_CONNECTION="Host=db;Port=5432;Database=appdb;Username=postgres;Password=postgres" \
+          backend-app
+
+    - name: 6. Проверка пользовательской сети и эндпоинта /items
+      run: |
+        sleep 15
+        docker ps
+        docker network inspect app-network
+        curl -f http://localhost:8080/items
+        echo "Сетевое взаимодействие между контейнерами работает!"
+
+    - name: 7. Очистка и проверка доп. задания (Docker Compose)
+      run: |
+        docker stop backend-container db && docker rm backend-container db
+        docker network rm app-network
+        docker compose up -d --build
+        sleep 15
+        docker compose ps
+        curl -f http://localhost:8080/items
+        docker compose down

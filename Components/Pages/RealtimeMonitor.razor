@@ -1,0 +1,208 @@
+﻿@page "/realtime-monitor"
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
+@using Microsoft.AspNetCore.SignalR.Client
+@inject NavigationManager Navigation
+@implements IAsyncDisposable
+
+<h3>Чат с комнатами и личными сообщениями (SignalR)</h3>
+
+@if (!string.IsNullOrEmpty(errorMessage))
+{
+    <div class="alert alert-danger">Ошибка подключения: @errorMessage</div>
+}
+
+<div class="row mt-3">
+    <!-- Левая колонка: Регистрация, комнаты и список онлайн -->
+    <div class="col-md-4">
+        <div class="card mb-3">
+            <div class="card-header bg-primary text-white">1. Регистрация в чате</div>
+            <div class="card-body">
+                <p class="mb-2">Статус: <strong>@(IsConnected ? "🟢 В сети" : "🔴 Подключение...")</strong></p>
+                <div class="input-group">
+                    <input @bind="userName" class="form-control" placeholder="Введите ваше имя..." />
+                    <button class="btn btn-primary" @onclick="Register" disabled="@(!IsConnected)">Войти</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="card mb-3">
+            <div class="card-header">2. Чат-комната (Группа SignalR)</div>
+            <div class="card-body">
+                <select class="form-select" value="@currentRoom" @onchange="OnRoomChanged" disabled="@(!IsConnected)">
+                    @foreach (var room in rooms)
+                    {
+                        <option value="@room">@room</option>
+                    }
+                </select>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header">Пользователи онлайн (@onlineUsers.Count)</div>
+            <ul class="list-group list-group-flush">
+                @foreach (var user in onlineUsers)
+                {
+                    <li class="list-group-item d-flex justify-content-between align-items-center">
+                        <span>@user.Value</span>
+                        <span class="badge bg-secondary">ID: @user.Key[..4]</span>
+                    </li>
+                }
+            </ul>
+        </div>
+    </div>
+
+    <!-- Правая колонка: Окно чата и отправка -->
+    <div class="col-md-8">
+        <div class="card mb-3">
+            <div class="card-header d-flex justify-content-between">
+                <span>Окно сообщений (Текущая группа: <strong>@currentRoom</strong>)</span>
+            </div>
+            <div class="card-body bg-light" style="height: 360px; overflow-y: auto;">
+                @if (messages.Count == 0)
+                {
+                    <p class="text-muted text-center mt-5">Сообщений пока нет. Напишите первым!</p>
+                }
+                @foreach (var msg in messages)
+                {
+                    <div class="alert @msg.CssClass py-2 px-3 mb-2">
+                        @msg.Text
+                    </div>
+                }
+            </div>
+            <div class="card-footer">
+                <div class="row g-2 mb-2">
+                    <div class="col-md-5">
+                        <select class="form-select form-select-sm" @bind="targetClientId">
+                            <option value="">📢 Всем в комнате «@currentRoom»</option>
+                            @foreach (var user in onlineUsers)
+                            {
+                                <option value="@user.Key">🔒 Лично: @user.Value</option>
+                            }
+                        </select>
+                    </div>
+                </div>
+
+                <div class="input-group">
+                    <input @bind="messageText" @bind:event="oninput" @onkeyup="HandleKeyUp"
+                           class="form-control" placeholder="Напишите сообщение и нажмите Enter..." disabled="@(!IsConnected)" />
+                    <button class="btn btn-success" @onclick="SendMessage" disabled="@(!IsConnected || string.IsNullOrWhiteSpace(messageText))">
+                        Отправить
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private HubConnection? hubConnection;
+    private string userName = "";
+    private string currentRoom = "Общий чат";
+    private readonly List<string> rooms = ["Общий чат", "Серверная", "Лаборатория"];
+
+    private Dictionary<string, string> onlineUsers = new();
+    private string targetClientId = "";
+    private string messageText = "";
+    private string? errorMessage;
+
+    private List<ChatMessage> messages = [];
+
+    public bool IsConnected => hubConnection?.State == HubConnectionState.Connected;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+
+        try
+        {
+            hubConnection = new HubConnectionBuilder()
+                .WithUrl(Navigation.ToAbsoluteUri("/temperaturehub"))
+                .WithAutomaticReconnect()
+                .Build();
+
+            hubConnection.On<string, string, string, string, bool>("ReceiveMessage",
+                (sender, targetInfo, text, time, isPrivate) =>
+                {
+                    var css = isPrivate ? "alert-warning" : "alert-primary";
+                    var formatted = $"[{time}] ({targetInfo}) {sender}: {text}";
+                    messages.Add(new ChatMessage(formatted, css));
+                    InvokeAsync(StateHasChanged);
+                });
+
+            hubConnection.On<Dictionary<string, string>>("UpdateOnlineUsers", (users) =>
+            {
+                onlineUsers = users;
+                InvokeAsync(StateHasChanged);
+            });
+
+            hubConnection.On<string>("ReceiveSystemNotification", (text) =>
+            {
+                var formatted = $"[{DateTime.Now:HH:mm:ss}] ℹ️ {text}";
+                messages.Add(new ChatMessage(formatted, "alert-secondary"));
+                InvokeAsync(StateHasChanged);
+            });
+
+            await hubConnection.StartAsync();
+            await hubConnection.InvokeAsync("JoinRoom", currentRoom);
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            errorMessage = ex.Message;
+            StateHasChanged();
+        }
+    }
+
+    private async Task Register()
+    {
+        if (hubConnection is not null && !string.IsNullOrWhiteSpace(userName))
+        {
+            await hubConnection.InvokeAsync("RegisterUser", userName);
+        }
+    }
+
+    private async Task OnRoomChanged(ChangeEventArgs e)
+    {
+        var newRoom = e.Value?.ToString();
+        if (hubConnection is null || string.IsNullOrEmpty(newRoom) || newRoom == currentRoom) return;
+
+        await hubConnection.InvokeAsync("LeaveRoom", currentRoom);
+        currentRoom = newRoom;
+        await hubConnection.InvokeAsync("JoinRoom", currentRoom);
+    }
+
+    private async Task SendMessage()
+    {
+        if (hubConnection is null || string.IsNullOrWhiteSpace(messageText)) return;
+
+        var textToSend = messageText;
+        messageText = "";
+
+        if (string.IsNullOrEmpty(targetClientId))
+        {
+            await hubConnection.InvokeAsync("SendToRoom", currentRoom, textToSend);
+        }
+        else
+        {
+            await hubConnection.InvokeAsync("SendPrivate", targetClientId, textToSend);
+        }
+    }
+
+    private async Task HandleKeyUp(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+        {
+            await SendMessage();
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (hubConnection is not null)
+        {
+            await hubConnection.DisposeAsync();
+        }
+    }
+
+    private record ChatMessage(string Text, string CssClass);
+}
